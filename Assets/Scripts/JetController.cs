@@ -4,26 +4,37 @@ using UnityEngine;
 
 public class JetController : MonoBehaviour
 {
+    
     public CameraController mainCamera;
+    public Transform jetMesh;
     public GameObject[] landingGears;
 
     public float engineThrust = 10000f;
     public float pitchSpeed = 30f;
     public float rollSpeed = 45f;
     public float yawSpeed = 25f;
+    public float autoTurnAngle = 30f;
 
+    public bool startInAir;
+    public bool autoTakeOff;
+    public bool autoLevel;
+
+    private Camera cam;
     private Rigidbody rb;
 
     private float thrust;
     private float pitch;
     private float roll;
     private float yaw;
+    private bool enableMouseControls;
 
     private bool landingGearsRetracted;
 
     internal float speed;
     internal float height;
     internal float throttle { get { return thrust; } }
+    internal bool showCrosshairs;
+    internal Vector3 crosshairPosition;
 
     private const float mToKm = 3.6f;
     private const float kmToKnots = 0.539f;
@@ -31,6 +42,8 @@ public class JetController : MonoBehaviour
 
     private void Awake()
     {
+        cam = Camera.main;
+
         rb = GetComponent<Rigidbody>();
         if (rb == null) rb = gameObject.AddComponent<Rigidbody>();
 
@@ -42,6 +55,18 @@ public class JetController : MonoBehaviour
         }
     }
 
+    private void Start()
+    {
+        if (startInAir)
+        {
+            transform.position = new Vector3(0, 20000, 0);
+            thrust = 100f;
+            rb.AddForce(transform.forward * 500f, ForceMode.VelocityChange);
+        }
+
+        if (autoTakeOff)
+            thrust = 100f;
+    }
 
     void Update()
     {
@@ -60,14 +85,19 @@ public class JetController : MonoBehaviour
         if (Input.GetKey(KeyCode.W)) pitch = 1f;
         if (Input.GetKey(KeyCode.S)) pitch = -1f;
 
+        CheckAutoTakeoff();
         UpdateThrottle();
         UpdateCamera();
+        if (enableMouseControls) CheckMouseControls();
 
         //todo: update our height using a raycast
         height = transform.position.y - 1f;
 
         if (height > 5 && !landingGearsRetracted)
             RetractLandingGears();
+
+        if (landingGearsRetracted && !enableMouseControls)
+            SetupMouseControls();
     }
 
     void RetractLandingGears()
@@ -77,6 +107,13 @@ public class JetController : MonoBehaviour
         {
             landingGears[i].SetActive(false);
         }
+    }
+
+    void CheckAutoTakeoff()
+    {
+        if (!autoTakeOff || landingGearsRetracted) return;
+        if (rb.velocity.magnitude > 100f)
+            pitch = -1f;
     }
 
     void UpdateThrottle()
@@ -94,8 +131,33 @@ public class JetController : MonoBehaviour
 
     void UpdateCamera()
     {
-        if (!Input.GetMouseButton(1)) return;
-        mainCamera.updatePosition(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
+        mainCamera.updatePosition(Input.GetAxisRaw("Mouse X"), -Input.GetAxisRaw("Mouse Y"));
+    }
+
+    void CheckMouseControls()
+    {
+        var localTarget = transform.InverseTransformDirection(cam.transform.forward).normalized * 5f;
+        var targetRollAngle = Mathf.Lerp(0f, autoTurnAngle, Mathf.Abs(localTarget.x));
+        if (localTarget.x > 0f) targetRollAngle *= -1f;
+
+        var rollAngle = FindAngle(jetMesh.transform.localEulerAngles.z);
+        var newAngle = targetRollAngle - rollAngle;
+
+        pitch = -Mathf.Clamp(localTarget.y, -1f, 1f);
+        roll = Mathf.Clamp(newAngle, -1f, 1f);
+        yaw = Mathf.Clamp(localTarget.x, -1f, 1f);
+    }
+
+    float FindAngle(float v)
+    {
+        if (v > 180f) v -= 360f;
+        return v;
+    }
+
+    void SetupMouseControls()
+    {
+        showCrosshairs = true;
+        enableMouseControls = true;
     }
 
     private void FixedUpdate()
@@ -103,10 +165,20 @@ public class JetController : MonoBehaviour
         transform.RotateAround(transform.position, transform.up, yaw * Time.fixedDeltaTime * yawSpeed);     //Yaw
 
         if (height > 2f)
-            transform.RotateAround(transform.position, transform.forward, roll * Time.fixedDeltaTime * rollSpeed);     //Roll
+            jetMesh.transform.RotateAround(jetMesh.transform.position, jetMesh.transform.forward, roll * Time.fixedDeltaTime * rollSpeed);     //Roll
 
-        if (rb.velocity.magnitude > 100f)
+        //if (rb.velocity.magnitude > 100f)
             transform.RotateAround(transform.position, transform.right, pitch * Time.fixedDeltaTime * pitchSpeed);     //Pitch
+
+
+        //Auto level the plane
+        if (autoLevel && landingGearsRetracted)
+        {
+            var rotateSpeed = Mathf.Clamp(transform.right.y, -1f, 1f) * -1f;
+
+            if (Mathf.Abs(pitch) > 0.1f)
+                transform.RotateAround(transform.position, transform.forward, rotateSpeed);
+        }
 
         var localVelocity = transform.InverseTransformDirection(rb.velocity);
         var localSpeed = Mathf.Max(0, localVelocity.z);
@@ -118,5 +190,11 @@ public class JetController : MonoBehaviour
         rb.velocity = Vector3.Lerp(rb.velocity, transform.forward * localSpeed, aerofactor * localSpeed * aerodynamicEffect * Time.fixedDeltaTime);
 
         rb.AddForce((thrust * engineThrust) * transform.forward);
+    }
+
+    private void LateUpdate()
+    {
+        if (!enableMouseControls) return;
+        crosshairPosition = cam.WorldToScreenPoint(transform.position + (transform.forward * 500f));
     }
 }
